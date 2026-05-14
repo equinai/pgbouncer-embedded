@@ -1,0 +1,12 @@
+{
+  "name": "@equin/pgbouncer-linux-arm64",
+  "version": "1.25.2",
+  "description": "Statically-linked PgBouncer binary for Linux ARM64",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["native/bin/pgbouncer"],
+  "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  }
+}

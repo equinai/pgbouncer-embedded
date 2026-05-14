@@ -1,0 +1,12 @@
+{
+  "name": "@equin/pgbouncer-darwin-arm64",
+  "version": "1.25.2",
+  "description": "Statically-linked PgBouncer binary for macOS ARM64",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["native/bin/pgbouncer"],
+  "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  }
+}
