@@ -60,14 +60,20 @@ jobs:
     name: Publish npm packages
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm
+        run: npm install -g npm@latest
 
       - name: Determine version
         id: version
@@ -102,12 +108,10 @@ jobs:
           done
 
       - name: Publish packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             echo "==> Publishing @equin/pgbouncer-${platform}"
             cd "packages/${platform}"
-            npm publish --access public
+            npm publish --provenance --access public
             cd ../..
           done

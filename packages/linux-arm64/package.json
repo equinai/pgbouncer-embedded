@@ -6,7 +6,12 @@
   "cpu": ["arm64"],
   "files": ["native/bin/pgbouncer"],
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/equinai/pgbouncer-embedded.git"
+  },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }
