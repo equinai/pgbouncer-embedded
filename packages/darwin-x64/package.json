@@ -2,16 +2,21 @@
   "name": "@equin/pgbouncer-darwin-x64",
   "version": "1.25.2",
   "description": "Statically-linked PgBouncer binary for macOS x64",
-  "os": ["darwin"],
-  "cpu": ["x64"],
-  "files": ["native/bin/pgbouncer"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "native/bin/pgbouncer"
+  ],
   "license": "ISC",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/equinai/pgbouncer-embedded.git"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   }
 }

@@ -1,0 +1,22 @@
+{
+  "name": "@equin/pgbouncer-embedded",
+  "version": "1.25.2",
+  "description": "Embedded PgBouncer — statically-linked binaries for macOS and Linux",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts"],
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/equinai/pgbouncer-embedded.git"
+  },
+  "optionalDependencies": {
+    "@equin/pgbouncer-darwin-arm64": "1.25.2",
+    "@equin/pgbouncer-darwin-x64": "1.25.2",
+    "@equin/pgbouncer-linux-arm64": "1.25.2",
+    "@equin/pgbouncer-linux-x64": "1.25.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

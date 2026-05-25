@@ -107,7 +107,19 @@ jobs:
             "
           done
 
-      - name: Publish packages
+          # Update meta package version and optionalDependencies
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/pgbouncer-embedded/package.json';
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            pkg.version = '${VERSION}';
+            for (const key of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[key] = '${VERSION}';
+            }
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish platform packages
         run: |
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             echo "==> Publishing @equin/pgbouncer-${platform}"
@@ -115,3 +127,9 @@ jobs:
             npm publish --provenance --access public
             cd ../..
           done
+
+      - name: Publish meta package
+        run: |
+          echo "==> Publishing @equin/pgbouncer-embedded"
+          cd packages/pgbouncer-embedded
+          npm publish --provenance --access public
