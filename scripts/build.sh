@@ -71,6 +71,7 @@ export CFLAGS="-O2"
 if [ ! -f config.mak ]; then
   ./configure \
     --without-openssl \
+    --without-cares \
     --disable-evdns
 fi
 make -j"$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" pgbouncer
