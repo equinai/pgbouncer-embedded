@@ -21,7 +21,8 @@ jobs:
           - platform: darwin-arm64
             runner: macos-latest
           - platform: darwin-x64
-            runner: macos-15-large
+            runner: macos-latest
+            arch: x86_64
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: linux-arm64
@@ -40,14 +41,22 @@ jobs:
       - name: Build
         run: |
           chmod +x scripts/build.sh
-          bash scripts/build.sh
+          if [ -n "${{ matrix.arch }}" ]; then
+            arch -${{ matrix.arch }} bash scripts/build.sh
+          else
+            bash scripts/build.sh
+          fi
 
       - name: Verify binary
         run: |
           BIN="packages/${{ matrix.platform }}/native/bin/pgbouncer"
           test -f "$BIN"
           file "$BIN"
-          "$BIN" --version
+          if [ -n "${{ matrix.arch }}" ]; then
+            arch -${{ matrix.arch }} "$BIN" --version
+          else
+            "$BIN" --version
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
