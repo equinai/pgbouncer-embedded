@@ -1,22 +1,112 @@
 name: Build and Publish
 
+# The npm version of every package equals the PgBouncer version it wraps.
+#
+#   schedule           newest upstream PgBouncer; build + publish if not on npm yet
+#   workflow_dispatch  the given version; build + publish if not on npm yet
+#   push tag v*        the tag's version; build + publish if not on npm yet
+#   pull_request,      newest upstream PgBouncer; build + verify, never publish
+#   push to main
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'npm package version to publish (e.g. 1.25.2)'
+        description: 'PgBouncer version to build and publish (e.g. 1.26.1) — the npm version equals it'
         required: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - name: Resolve version and whether to publish
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          UPSTREAM=https://github.com/pgbouncer/pgbouncer
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            RELEASE=true
+          elif [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${REF_NAME#v}"
+            RELEASE=true
+          else
+            # Highest pgbouncer_X_Y_Z tag upstream (no release candidates).
+            VERSION=$(git ls-remote --tags --refs "$UPSTREAM" \
+              | sed -nE 's#^.*refs/tags/pgbouncer_([0-9]+)_([0-9]+)_([0-9]+)$#\1.\2.\3#p' \
+              | sort -t. -k1,1n -k2,2n -k3,3n \
+              | tail -n 1)
+            if [ "$EVENT" = "schedule" ]; then RELEASE=true; else RELEASE=false; fi
+          fi
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Resolved version is not X.Y.Z: '${VERSION}'"
+            exit 1
+          fi
+
+          TAG="pgbouncer_${VERSION//./_}"
+          if [ -z "$(git ls-remote --tags --refs "$UPSTREAM" "refs/tags/${TAG}")" ]; then
+            echo "::error::PgBouncer has no release tag ${TAG}"
+            exit 1
+          fi
+
+          # Publish if any of the five packages lacks this version (so a run
+          # that published only some of them is completed by the next run).
+          MISSING=""
+          for pkg in pgbouncer-darwin-arm64 pgbouncer-darwin-x64 pgbouncer-linux-x64 pgbouncer-linux-arm64 pgbouncer-embedded; do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/@equin/${pkg}/${VERSION}")
+            case "$CODE" in
+              200) ;;
+              404) MISSING="${MISSING} @equin/${pkg}" ;;
+              *) echo "::error::npm registry answered HTTP ${CODE} for @equin/${pkg}@${VERSION}"; exit 1 ;;
+            esac
+          done
+
+          PUBLISH=false
+          if [ "$RELEASE" = "true" ] && [ -n "$MISSING" ]; then PUBLISH=true; fi
+          # A release run with everything already published has nothing to build.
+          BUILD=true
+          if [ "$RELEASE" = "true" ] && [ "$PUBLISH" = "false" ]; then BUILD=false; fi
+
+          echo "PgBouncer ${VERSION} (event: ${EVENT}); not on npm:${MISSING:- none}; build=${BUILD} publish=${PUBLISH}"
+          {
+            echo "version=${VERSION}"
+            echo "publish=${PUBLISH}"
+            echo "build=${BUILD}"
+          } >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      PGBOUNCER_VERSION: ${{ needs.resolve.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,23 +132,34 @@ jobs:
             build-essential pkg-config curl
 
       - name: Build
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           chmod +x scripts/build.sh
-          if [ -n "${{ matrix.arch }}" ]; then
-            arch -${{ matrix.arch }} bash scripts/build.sh
+          if [ -n "$ARCH" ]; then
+            arch "-$ARCH" bash scripts/build.sh
           else
             bash scripts/build.sh
           fi
 
       - name: Verify binary
+        env:
+          ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          BIN="packages/${{ matrix.platform }}/native/bin/pgbouncer"
+          set -euo pipefail
+          BIN="packages/${PLATFORM}/native/bin/pgbouncer"
           test -f "$BIN"
           file "$BIN"
-          if [ -n "${{ matrix.arch }}" ]; then
-            arch -${{ matrix.arch }} "$BIN" --version
+          if [ -n "$ARCH" ]; then
+            OUT=$(arch "-$ARCH" "$BIN" --version)
           else
-            "$BIN" --version
+            OUT=$("$BIN" --version)
+          fi
+          echo "$OUT"
+          if ! grep -qF "PgBouncer ${PGBOUNCER_VERSION}" <<<"$OUT"; then
+            echo "::error::Expected 'PgBouncer ${PGBOUNCER_VERSION}' in --version output"
+            exit 1
           fi
 
       - name: Upload artifact
@@ -70,11 +171,14 @@ jobs:
 
   publish:
     name: Publish npm packages
-    needs: build
+    needs: [resolve, build]
+    if: needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
 
     steps:
       - uses: actions/checkout@v5
@@ -87,15 +191,6 @@ jobs:
       - name: Upgrade npm
         run: npm install -g npm@latest
 
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
@@ -103,7 +198,7 @@ jobs:
 
       - name: Stage binaries and set versions
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          set -euo pipefail
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             mkdir -p "packages/${platform}/native/bin"
             cp "artifacts/pgbouncer-${platform}/pgbouncer" \
@@ -114,7 +209,7 @@ jobs:
               const fs = require('fs');
               const p = 'packages/${platform}/package.json';
               const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-              pkg.version = '${VERSION}';
+              pkg.version = process.env.VERSION;
               fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
             "
           done
@@ -124,24 +219,40 @@ jobs:
             const fs = require('fs');
             const p = 'packages/pgbouncer-embedded/package.json';
             const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-            pkg.version = '${VERSION}';
+            pkg.version = process.env.VERSION;
             for (const key of Object.keys(pkg.optionalDependencies || {})) {
-              pkg.optionalDependencies[key] = '${VERSION}';
+              pkg.optionalDependencies[key] = process.env.VERSION;
             }
             fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Publish platform packages
+      - name: Publish packages
         run: |
-          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            echo "==> Publishing @equin/pgbouncer-${platform}"
-            cd "packages/${platform}"
-            npm publish --provenance --access public
-            cd ../..
+          set -euo pipefail
+          # Platform packages first, the meta package (which depends on them) last.
+          # Each publish is skipped if that version is already on npm, so a re-run
+          # completes a partially published release.
+          for dir in darwin-arm64 darwin-x64 linux-x64 linux-arm64 pgbouncer-embedded; do
+            name=$(node -p "require('./packages/${dir}/package.json').name")
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${name}/${VERSION}")
+            case "$CODE" in
+              200) echo "==> ${name}@${VERSION} already published, skipping"; continue ;;
+              404) ;;
+              *) echo "::error::npm registry answered HTTP ${CODE} for ${name}@${VERSION}"; exit 1 ;;
+            esac
+            echo "==> Publishing ${name}@${VERSION}"
+            (cd "packages/${dir}" && npm publish --provenance --access public)
           done
 
-      - name: Publish meta package
+      - name: Tag the release
+        if: github.ref_type != 'tag'
         run: |
-          echo "==> Publishing @equin/pgbouncer-embedded"
-          cd packages/pgbouncer-embedded
-          npm publish --provenance --access public
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if [ -n "$(git ls-remote --tags --refs origin "refs/tags/${TAG}")" ]; then
+            echo "Tag ${TAG} already exists"
+            exit 0
+          fi
+          # A GITHUB_TOKEN push does not trigger another workflow run.
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"

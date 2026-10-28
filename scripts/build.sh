@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PGBOUNCER_VERSION="1.25.2"
+# The PgBouncer release to build, e.g. 1.26.1. Required: the workflow's
+# `resolve` job is its one source of truth (and the npm version equals it).
+: "${PGBOUNCER_VERSION:?PGBOUNCER_VERSION must be set (e.g. PGBOUNCER_VERSION=1.26.1)}"
+if ! [[ "${PGBOUNCER_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "PGBOUNCER_VERSION must be X.Y.Z, got: ${PGBOUNCER_VERSION}" >&2
+  exit 1
+fi
 LIBEVENT_VERSION="2.1.12-stable"
 
-PGBOUNCER_URL="https://github.com/pgbouncer/pgbouncer/releases/download/pgbouncer_1_25_2/pgbouncer-${PGBOUNCER_VERSION}.tar.gz"
+# Upstream tags releases as pgbouncer_X_Y_Z.
+PGBOUNCER_TAG="pgbouncer_${PGBOUNCER_VERSION//./_}"
+PGBOUNCER_URL="https://github.com/pgbouncer/pgbouncer/releases/download/${PGBOUNCER_TAG}/pgbouncer-${PGBOUNCER_VERSION}.tar.gz"
 LIBEVENT_URL="https://github.com/libevent/libevent/releases/download/release-${LIBEVENT_VERSION}/libevent-${LIBEVENT_VERSION}.tar.gz"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
