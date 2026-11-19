@@ -44,7 +44,7 @@ case "${1:-}" in
       exit 1
     fi
     IFS=. read -r X Y Z <<<"$2"
-    V="${X}.${Y}.$((Z * SCALE + R))"
+    V="${X}.${Y}.$((10#$Z * SCALE + 10#$R))"
     if semver_le "$V" "$LEGACY_THROUGH"; then
       echo "PgBouncer $2 rebuild $R encodes to $V, which is not past the legacy versions (<= ${LEGACY_THROUGH})" >&2
       exit 1
@@ -57,7 +57,7 @@ case "${1:-}" in
     if semver_le "$2" "$LEGACY_THROUGH"; then
       echo "$2"
     else
-      echo "${X}.${Y}.$((P / SCALE))"
+      echo "${X}.${Y}.$((10#$P / SCALE))"
     fi
     ;;
   *)
