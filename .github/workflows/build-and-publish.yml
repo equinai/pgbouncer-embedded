@@ -1,10 +1,14 @@
 name: Build and Publish
 
-# The npm version of every package equals the PgBouncer version it wraps.
+# The npm version of every package names the PgBouncer release it wraps and a
+# wrapper rebuild count (scripts/version.sh): PgBouncer X.Y.Z, rebuild R →
+# X.Y.(Z*100+R). Every build applies patches/*.patch.
 #
-#   schedule           newest upstream PgBouncer; build + publish if not on npm yet
-#   workflow_dispatch  the given version; build + publish if not on npm yet
-#   push tag v*        the tag's version; build + publish if not on npm yet
+#   schedule           newest upstream PgBouncer, rebuild 0; build + publish
+#                      unless a wrapper of it is on npm already
+#   workflow_dispatch  the given PgBouncer version and rebuild; build + publish
+#                      if not on npm yet (a patch-only rebuild: rebuild >= 1)
+#   push tag v*        the tag's npm version; build + publish if not on npm yet
 #   pull_request,      newest upstream PgBouncer; build + verify, never publish
 #   push to main
 on:
@@ -19,8 +23,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'PgBouncer version to build and publish (e.g. 1.26.1) — the npm version equals it'
+        description: 'PgBouncer version to build (e.g. 1.26.1)'
         required: true
+      rebuild:
+        description: 'Wrapper rebuild count for that version, 0-99 (a patch-only rebuild of a published release takes the next one: 1.26.1 rebuild 1 publishes 1.26.101)'
+        required: true
+        default: '0'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -33,9 +41,12 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      npm_version: ${{ steps.resolve.outputs.npm_version }}
       publish: ${{ steps.resolve.outputs.publish }}
       build: ${{ steps.resolve.outputs.build }}
     steps:
+      - uses: actions/checkout@v5
+
       - name: Resolve version and whether to publish
         id: resolve
         env:
@@ -43,15 +54,19 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REBUILD: ${{ inputs.rebuild }}
         run: |
           set -euo pipefail
           UPSTREAM=https://github.com/pgbouncer/pgbouncer
+          NPM_VERSION=""
 
           if [ "$EVENT" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
+            NPM_VERSION=$(bash scripts/version.sh encode "$VERSION" "$INPUT_REBUILD")
             RELEASE=true
           elif [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
-            VERSION="${REF_NAME#v}"
+            NPM_VERSION="${REF_NAME#v}"
+            VERSION=$(bash scripts/version.sh decode "$NPM_VERSION")
             RELEASE=true
           else
             # Highest pgbouncer_X_Y_Z tag upstream (no release candidates).
@@ -73,15 +88,39 @@ jobs:
             exit 1
           fi
 
+          if [ -z "$NPM_VERSION" ]; then
+            # The newest release upstream: its newest wrapper already on npm
+            # (any rebuild — so a later rebuild is never shadowed by a fresh
+            # rebuild 0, and a partly published one is completed), else rebuild 0.
+            PUBLISHED=$(curl -fsS "https://registry.npmjs.org/@equin/pgbouncer-darwin-arm64" \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(Object.keys(JSON.parse(s).versions).join("\n")))')
+            NPM_VERSION=""
+            for v in $PUBLISHED; do
+              [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+              if [ "$(bash scripts/version.sh decode "$v")" = "$VERSION" ]; then
+                if [ -z "$NPM_VERSION" ] || [ "$(printf '%s\n%s\n' "$NPM_VERSION" "$v" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" = "$v" ]; then
+                  NPM_VERSION="$v"
+                fi
+              fi
+            done
+            if [ -z "$NPM_VERSION" ]; then
+              NPM_VERSION=$(bash scripts/version.sh encode "$VERSION" 0)
+            fi
+          fi
+          if [ "$(bash scripts/version.sh decode "$NPM_VERSION")" != "$VERSION" ]; then
+            echo "::error::npm version ${NPM_VERSION} does not wrap PgBouncer ${VERSION}"
+            exit 1
+          fi
+
           # Publish if any of the five packages lacks this version (so a run
           # that published only some of them is completed by the next run).
           MISSING=""
           for pkg in pgbouncer-darwin-arm64 pgbouncer-darwin-x64 pgbouncer-linux-x64 pgbouncer-linux-arm64 pgbouncer-embedded; do
-            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/@equin/${pkg}/${VERSION}")
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/@equin/${pkg}/${NPM_VERSION}")
             case "$CODE" in
               200) ;;
               404) MISSING="${MISSING} @equin/${pkg}" ;;
-              *) echo "::error::npm registry answered HTTP ${CODE} for @equin/${pkg}@${VERSION}"; exit 1 ;;
+              *) echo "::error::npm registry answered HTTP ${CODE} for @equin/${pkg}@${NPM_VERSION}"; exit 1 ;;
             esac
           done
 
@@ -91,9 +130,10 @@ jobs:
           BUILD=true
           if [ "$RELEASE" = "true" ] && [ "$PUBLISH" = "false" ]; then BUILD=false; fi
 
-          echo "PgBouncer ${VERSION} (event: ${EVENT}); not on npm:${MISSING:- none}; build=${BUILD} publish=${PUBLISH}"
+          echo "PgBouncer ${VERSION} as npm ${NPM_VERSION} (event: ${EVENT}); not on npm:${MISSING:- none}; build=${BUILD} publish=${PUBLISH}"
           {
             echo "version=${VERSION}"
+            echo "npm_version=${NPM_VERSION}"
             echo "publish=${PUBLISH}"
             echo "build=${BUILD}"
           } >> "$GITHUB_OUTPUT"
@@ -178,7 +218,7 @@ jobs:
       contents: write
       id-token: write
     env:
-      VERSION: ${{ needs.resolve.outputs.version }}
+      VERSION: ${{ needs.resolve.outputs.npm_version }}
 
     steps:
       - uses: actions/checkout@v5

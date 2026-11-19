@@ -1,0 +1,75 @@
+diff --git a/doc/config.md b/doc/config.md
+index 70c3fbb..4ead138 100644
+--- a/doc/config.md
++++ b/doc/config.md
+@@ -1211,7 +1211,15 @@ Default: 1 on Linux, otherwise 0
+ 
+ ### tcp_socket_buffer
+ 
+-Default: not set
++In-kernel send and receive buffer size (`SO_SNDBUF` / `SO_RCVBUF`) of every
++socket PgBouncer opens or accepts — TCP and, despite the name, Unix-domain
++sockets, both client-facing and towards the server.  On a Unix stream socket
++the sender's buffer bounds how much of a reply is in flight: macOS defaults it
++to 8 KB, so without this a client reads a large result 8 KB per wakeup.  The
++kernel caps the value (`kern.ipc.maxsockbuf` on macOS, `net.core.wmem_max` /
++`rmem_max` on Linux); a value over the macOS cap fails the connection.
++
++Default: not set (the operating system's default)
+ 
+ ### tcp_keepalive
+ 
+diff --git a/src/util.c b/src/util.c
+index b280a7e..04e573b 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -174,6 +174,26 @@ bool tune_socket(int sock, bool is_unix)
+ 	if (!ok)
+ 		goto fail;
+ 
++	/*
++	 * In-kernel socket buffer size, on Unix sockets too: a Unix stream
++	 * socket's sender-side buffer bounds how much of a reply is in flight,
++	 * and macOS defaults it to 8 KB (net.local.stream.sendspace), so a
++	 * client reads a large result 8 KB per wakeup. Applied before the
++	 * TCP-only options below.
++	 */
++	if (cf_tcp_socket_buffer) {
++		val = cf_tcp_socket_buffer;
++		errpos = "setsockopt/SO_SNDBUF";
++		res = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &val, sizeof(val));
++		if (res < 0)
++			goto fail;
++		val = cf_tcp_socket_buffer;
++		errpos = "setsockopt/SO_RCVBUF";
++		res = setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &val, sizeof(val));
++		if (res < 0)
++			goto fail;
++	}
++
+ 	/*
+ 	 * Following options are for network sockets
+ 	 */
+@@ -205,22 +225,6 @@ bool tune_socket(int sock, bool is_unix)
+ #endif
+ 	}
+ 
+-	/*
+-	 * set in-kernel socket buffer size
+-	 */
+-	if (cf_tcp_socket_buffer) {
+-		val = cf_tcp_socket_buffer;
+-		errpos = "setsockopt/SO_SNDBUF";
+-		res = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &val, sizeof(val));
+-		if (res < 0)
+-			goto fail;
+-		val = cf_tcp_socket_buffer;
+-		errpos = "setsockopt/SO_RCVBUF";
+-		res = setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &val, sizeof(val));
+-		if (res < 0)
+-			goto fail;
+-	}
+-
+ 	/*
+ 	 * Turn off kernel buffering, each send() will be one packet.
+ 	 */

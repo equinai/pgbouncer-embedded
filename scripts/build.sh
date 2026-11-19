@@ -65,6 +65,23 @@ fi
 echo "==> Building PgBouncer"
 cd "${PGBOUNCER_SRC}"
 
+# Our patches on top of the release (patches/*.patch, in name order). Applied
+# once per extracted tree: the marker keeps a rebuild of the same tree from
+# applying them twice. `patch --dry-run` first, so a patch that no longer
+# applies to a new upstream release fails the build loudly, naming itself.
+if [ ! -f .equin-patched ]; then
+  for p in "${REPO_ROOT}"/patches/*.patch; do
+    [ -e "$p" ] || continue
+    echo "==> Applying $(basename "$p")"
+    if ! patch -p1 --forward --dry-run --silent < "$p" > /dev/null; then
+      echo "Patch $(basename "$p") does not apply to PgBouncer ${PGBOUNCER_VERSION}" >&2
+      exit 1
+    fi
+    patch -p1 --forward --silent < "$p"
+  done
+  touch .equin-patched
+fi
+
 export LIBEVENT_CFLAGS="-I${LIBEVENT_PREFIX}/include"
 
 if [ "$OS" = "linux" ]; then
