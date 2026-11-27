@@ -1,0 +1,50 @@
+--- a/src/util.c
++++ b/src/util.c
+@@ -156,6 +156,31 @@
+ void get_random_bytes(uint8_t *dest, int len)
+ {
+ 	csrandom_bytes(dest, len);
++}
++
++/*
++ * Whether an accepted socket's peer has already disconnected. macOS refuses
++ * every setsockopt (and getpeername) on a stream socket that can neither send
++ * nor receive any more with EINVAL, which is what an accepted socket whose
++ * client already closed is: so an EINVAL from tune_socket can mean "the peer
++ * left", not "this option is wrong". It means the former only when both hold:
++ * the socket is no longer connected (getpeername fails) and it once was (a
++ * peek reads buffered bytes or the peer's EOF, where a never-connected socket
++ * fails ENOTCONN and a live one EAGAIN). A real option failure on a live or
++ * fresh socket stays a warning.
++ */
++static bool peer_already_gone(int sock)
++{
++	struct sockaddr_storage addr;
++	socklen_t len = sizeof(addr);
++	char c;
++	int saved_errno = errno;
++	bool gone;
++
++	gone = getpeername(sock, (struct sockaddr *)&addr, &len) < 0
++	       && recv(sock, &c, 1, MSG_PEEK | MSG_DONTWAIT) >= 0;
++	errno = saved_errno;
++	return gone;
+ }
+ 
+ /* set needed socket options */
+@@ -235,6 +260,15 @@
+ 		goto fail;
+ 	return true;
+ fail:
++	if (errno == EINVAL && peer_already_gone(sock)) {
++		/*
++		 * Not a socket-option failure: the client connected and left
++		 * before we got to it (a liveness probe dials and closes at
++		 * once). The caller drops the socket as for any failure.
++		 */
++		log_debug("%s(%d): peer already disconnected", errpos, sock);
++		return false;
++	}
+ 	log_warning("%s(%d) failed: %s", errpos, sock, strerror(errno));
+ 	return false;
+ }

@@ -68,6 +68,15 @@ itself — fix or drop it in the same change.
   loop turns took 150 ms), 2 reads (0.16 s) with `tcp_socket_buffer = 1048576`.
   The key stays the existing one, so the same config is valid for an
   unpatched binary (which applies it to no Unix socket).
+- `0002-quiet-disconnected-peer.patch` — a client that connects and closes
+  before PgBouncer tunes its socket (a liveness probe) is logged at debug, not
+  as a `WARNING socket_setup(<fd>) failed: Invalid argument` (or
+  `setsockopt/SO_SNDBUF`). macOS refuses every `setsockopt` on a stream socket
+  that can neither send nor receive with EINVAL, so an accepted socket whose
+  peer already left fails the first option set on it. The quiet path is taken
+  only when the socket is no longer connected (`getpeername` fails) and once
+  was (a `MSG_PEEK` reads its bytes or EOF); any other failure stays a warning.
+  Main's PgBouncer logged ~20–30k such lines a day from the gateway's 2 s probe.
 
 ## Patch-only rebuilds
 
